@@ -1,5 +1,7 @@
 # 面经派（InterviewPai）
 
+> ⚠️ **声明**：本项目为 **AI Coding 练手项目**，用于学习和实践 AI 辅助编程技术。项目中的代码由 AI 辅助生成，仅供学习参考，不建议直接用于生产环境。
+
 <p align="center">
   <img src="https://img.shields.io/badge/Spring%20Boot-3.2.0-brightgreen" alt="Spring Boot">
   <img src="https://img.shields.io/badge/Vue-3.4.0-brightgreen" alt="Vue">
