@@ -88,3 +88,6 @@ coverage/
 # Application specific
 uploads/
 logs/
+
+# Project docs
+需求文档.md
