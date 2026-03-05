@@ -4,6 +4,23 @@
       <template #content>
         <span class="page-title">{{ detail?.fileName || '面试详情' }}</span>
       </template>
+      <template #extra>
+        <el-button 
+          v-if="detail?.status === 'PROCESSING' || detail?.status === 'FAILED'"
+          type="warning" 
+          @click="startStreamProcess"
+          :loading="streaming"
+        >
+          {{ detail?.status === 'PROCESSING' ? '查看处理进度' : '重新处理' }}
+        </el-button>
+        <el-button 
+          type="primary" 
+          @click="showGenerateDialog"
+          :disabled="detail?.status !== 'FINISHED'"
+        >
+          生成面经
+        </el-button>
+      </template>
     </el-page-header>
     
     <el-row :gutter="20" class="mt-20">
@@ -130,14 +147,68 @@
         <el-button type="primary" @click="saveEdit">保存</el-button>
       </template>
     </el-dialog>
+    
+    <el-dialog v-model="generateDialogVisible" title="生成面经" width="500px">
+      <el-form :model="generateForm" label-width="80px">
+        <el-form-item label="面经标题">
+          <el-input v-model="generateForm.title" placeholder="请输入面经标题（可选）" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="generateDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleGenerate" :loading="generating">生成</el-button>
+      </template>
+    </el-dialog>
+    
+    <el-dialog v-model="resultDialogVisible" title="面经预览" width="800px" top="5vh">
+      <div class="experience-result">
+        <div class="result-header">
+          <h3>{{ experienceResult?.title }}</h3>
+          <div class="result-actions">
+            <el-button type="primary" @click="downloadExperience">下载文件</el-button>
+            <el-button @click="copyContent">复制内容</el-button>
+          </div>
+        </div>
+        <div class="result-content">
+          <pre>{{ experienceResult?.content }}</pre>
+        </div>
+      </div>
+    </el-dialog>
+    
+    <el-dialog v-model="processDialogVisible" title="实时处理进度" width="700px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <div class="process-status">
+        <div class="status-item">
+          <el-icon v-if="processStatus.status !== 'done'" class="is-loading"><Loading /></el-icon>
+          <el-icon v-else color="#67C23A"><SuccessFilled /></el-icon>
+          <span>{{ processStatus.status }}</span>
+        </div>
+        
+        <div class="stream-output">
+          <div class="output-label">LLM 输出：</div>
+          <pre class="output-content">{{ processStatus.streamOutput || '等待输出...' }}</pre>
+        </div>
+        
+        <el-progress 
+          v-if="processStatus.chunkTotal > 0"
+          :percentage="Math.round((processStatus.chunkIndex / processStatus.chunkTotal) * 100)"
+          :format="() => `${processStatus.chunkIndex}/${processStatus.chunkTotal}`"
+          class="mt-20"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="cancelStream" :disabled="processStatus.status === 'done'">取消</el-button>
+        <el-button type="primary" @click="closeProcessDialog" v-if="processStatus.status === 'done'">完成</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getInterviewDetail, updateQa, deleteQa, type InterviewDetailDTO, type QaRecordDTO } from '@/api/interview'
+import { Loading, SuccessFilled } from '@element-plus/icons-vue'
+import { getInterviewDetail, updateQa, deleteQa, generateExperience, streamProcessAudio, type InterviewDetailDTO, type QaRecordDTO, type GenerateExperienceResponse } from '@/api/interview'
 import { getAllTags, type Tag } from '@/api/review'
 
 const route = useRoute()
@@ -156,9 +227,35 @@ const editForm = reactive({
   tags: [] as string[]
 })
 
+const generateDialogVisible = ref(false)
+const generating = ref(false)
+const generateForm = reactive({
+  title: ''
+})
+
+const resultDialogVisible = ref(false)
+const experienceResult = ref<GenerateExperienceResponse | null>(null)
+
+const streaming = ref(false)
+const processDialogVisible = ref(false)
+const processStatus = reactive({
+  status: '',
+  streamOutput: '',
+  chunkIndex: 0,
+  chunkTotal: 0
+})
+
+let cancelStreamFn: (() => void) | null = null
+
 onMounted(() => {
   loadDetail()
   loadTags()
+})
+
+onUnmounted(() => {
+  if (cancelStreamFn) {
+    cancelStreamFn()
+  }
 })
 
 async function loadDetail() {
@@ -222,6 +319,125 @@ async function deleteQaRecord(qaId: number) {
       console.error(error)
     }
   }
+}
+
+function showGenerateDialog() {
+  generateForm.title = ''
+  generateDialogVisible.value = true
+}
+
+async function handleGenerate() {
+  const id = Number(route.params.id)
+  if (!id) return
+  
+  generating.value = true
+  try {
+    const res = await generateExperience(id, { title: generateForm.title || undefined })
+    experienceResult.value = res.data
+    generateDialogVisible.value = false
+    resultDialogVisible.value = true
+    ElMessage.success('面经生成成功')
+  } catch (error) {
+    console.error(error)
+  } finally {
+    generating.value = false
+  }
+}
+
+function downloadExperience() {
+  if (!experienceResult.value?.content) return
+  
+  const blob = new Blob([experienceResult.value.content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${experienceResult.value.title}.md`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  
+  URL.revokeObjectURL(url)
+  ElMessage.success('文件下载成功')
+}
+
+async function copyContent() {
+  if (!experienceResult.value?.content) return
+  
+  try {
+    await navigator.clipboard.writeText(experienceResult.value.content)
+    ElMessage.success('内容已复制到剪贴板')
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('复制失败')
+  }
+}
+
+function startStreamProcess() {
+  const id = Number(route.params.id)
+  if (!id) return
+  
+  processStatus.status = '初始化...'
+  processStatus.streamOutput = ''
+  processStatus.chunkIndex = 0
+  processStatus.chunkTotal = 0
+  processDialogVisible.value = true
+  streaming.value = true
+  
+  cancelStreamFn = streamProcessAudio(id, (event) => {
+    switch (event.type) {
+      case 'status':
+        processStatus.status = event.data
+        break
+      case 'qa_chunk_start':
+        try {
+          const data = JSON.parse(event.data)
+          processStatus.chunkIndex = data.chunk
+          processStatus.chunkTotal = data.total
+        } catch (e) {}
+        break
+      case 'qa_stream':
+      case 'summary_stream':
+        processStatus.streamOutput += event.data
+        break
+      case 'qa_chunk_end':
+        processStatus.streamOutput += '\n\n--- 片段处理完成 ---\n\n'
+        break
+      case 'summary_start':
+        processStatus.status = '正在生成总结...'
+        processStatus.streamOutput += '\n\n=== 开始生成总结 ===\n\n'
+        break
+      case 'summary_end':
+        processStatus.streamOutput += '\n\n=== 总结生成完成 ===\n\n'
+        break
+      case 'done':
+        processStatus.status = '处理完成'
+        streaming.value = false
+        loadDetail()
+        break
+      case 'error':
+        processStatus.status = '处理失败: ' + event.data
+        streaming.value = false
+        ElMessage.error(event.data)
+        break
+      case 'warning':
+        ElMessage.warning(event.data)
+        break
+    }
+  })
+}
+
+function cancelStream() {
+  if (cancelStreamFn) {
+    cancelStreamFn()
+    cancelStreamFn = null
+  }
+  streaming.value = false
+  processDialogVisible.value = false
+}
+
+function closeProcessDialog() {
+  processDialogVisible.value = false
 }
 
 function getStatusType(status?: string) {
@@ -326,6 +542,75 @@ function getStatusText(status?: string) {
         margin-right: 8px;
         margin-bottom: 8px;
       }
+    }
+  }
+}
+
+.experience-result {
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #eee;
+    
+    h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+  }
+  
+  .result-content {
+    max-height: 60vh;
+    overflow-y: auto;
+    
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.8;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #f9f9f9;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+  }
+}
+
+.process-status {
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    margin-bottom: 20px;
+    
+    .el-icon {
+      font-size: 20px;
+    }
+  }
+  
+  .stream-output {
+    .output-label {
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: #666;
+    }
+    
+    .output-content {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 16px;
+      border-radius: 8px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+      line-height: 1.6;
     }
   }
 }

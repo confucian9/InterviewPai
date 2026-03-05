@@ -61,4 +61,13 @@ public class InterviewController {
         interviewService.deleteQa(user.getId(), qaId);
         return Result.success();
     }
+    
+    @PostMapping("/{audioId}/generate-experience")
+    public Result<GenerateExperienceResponse> generateExperience(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long audioId,
+            @RequestBody(required = false) GenerateExperienceRequest request) {
+        GenerateExperienceResponse response = interviewService.generateExperience(user.getId(), audioId, request);
+        return Result.success(response);
+    }
 }

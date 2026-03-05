@@ -17,13 +17,13 @@ import java.util.List;
 public class AudioService {
     
     private final AudioRecordMapper audioRecordMapper;
-    private final MinioService minioService;
+    private final OssService ossService;
     
     private static final List<String> ALLOWED_TYPES = Arrays.asList("mp3", "wav", "m4a");
     
-    public AudioService(AudioRecordMapper audioRecordMapper, MinioService minioService) {
+    public AudioService(AudioRecordMapper audioRecordMapper, OssService ossService) {
         this.audioRecordMapper = audioRecordMapper;
-        this.minioService = minioService;
+        this.ossService = ossService;
     }
     
     public AudioUploadResponse uploadAudio(Long userId, MultipartFile file) {
@@ -37,8 +37,8 @@ public class AudioService {
             throw new RuntimeException("不支持的文件格式，仅支持 mp3, wav, m4a");
         }
         
-        String objectName = minioService.uploadFile(file, "audio");
-        String fileUrl = minioService.getPresignedUrl(objectName);
+        String objectName = ossService.uploadFile(file, "audio");
+        String fileUrl = ossService.getPresignedUrl(objectName);
         
         AudioRecord record = new AudioRecord();
         record.setUserId(userId);
@@ -79,7 +79,7 @@ public class AudioService {
         }
         
         if (record.getFileUrl() != null) {
-            minioService.deleteFile(record.getFileUrl());
+            ossService.deleteFile(record.getFileUrl());
         }
         
         audioRecordMapper.deleteById(audioId);
@@ -97,7 +97,7 @@ public class AudioService {
         AudioRecordDTO dto = new AudioRecordDTO();
         dto.setId(record.getId());
         dto.setFileName(record.getFileName());
-        dto.setFileUrl(minioService.getPresignedUrl(record.getFileUrl()));
+        dto.setFileUrl(ossService.getPresignedUrl(record.getFileUrl()));
         dto.setDuration(record.getDuration());
         dto.setStatus(record.getStatus());
         dto.setCreateTime(record.getCreateTime());
